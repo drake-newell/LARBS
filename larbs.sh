@@ -71,7 +71,7 @@ adduserandpass() { \
 	dialog --infobox "Adding user \"$name\"..." 4 50
 	useradd -m -g wheel -s /bin/bash "$name" >/dev/null 2>&1 ||
 	usermod -a -G wheel "$name" && mkdir -p /home/"$name" && chown "$name":wheel /home/"$name"
-	repodir="/home/$name/.local/src"; mkdir -p "$repodir"; chown -R "$name":wheel "$repodir"
+	repodir="/home/$name/.local/src"; mkdir -p "$repodir"; chown -R "$name":wheel $(dirname "$repodir")
 	echo "$name:$pass1" | chpasswd
 	unset pass1 pass2 ;}
 
@@ -101,7 +101,7 @@ maininstall() { # Installs all needed programs from main repo.
 	}
 
 gitmakeinstall() {
-	progname="$(basename "$1")"
+	progname="$(basename "$1" .git)"
 	dir="$repodir/$progname"
 	dialog --title "LARBS Installation" --infobox "Installing \`$progname\` ($n of $total) via \`git\` and \`make\`. $(basename "$1") $2" 5 70
 	sudo -u "$name" git clone --depth 1 "$1" "$dir" >/dev/null 2>&1 || { cd "$dir" || return ; sudo -u "$name" git pull --force origin master;}
@@ -143,7 +143,7 @@ putgitrepo() { # Downloads a gitrepo $1 and places the files in $2 only overwrit
 	dir=$(mktemp -d)
 	[ ! -d "$2" ] && mkdir -p "$2"
 	chown -R "$name":wheel "$dir" "$2"
-	sudo -u "$name" git clone -b "$branch" --depth 1 "$1" "$dir" >/dev/null 2>&1
+	sudo -u "$name" git clone --recursive -b "$branch" --depth 1 "$1" "$dir" >/dev/null 2>&1
 	sudo -u "$name" cp -rfT "$dir" "$2"
 	}
 
@@ -182,7 +182,7 @@ preinstallmsg || error "User exited."
 adduserandpass || error "Error adding username and/or password."
 
 # Refresh Arch keyrings.
-# refreshkeys || error "Error automatically refreshing Arch keyring. Consider doing so manually."
+refreshkeys || error "Error automatically refreshing Arch keyring. Consider doing so manually."
 
 dialog --title "LARBS Installation" --infobox "Installing \`basedevel\` and \`git\` for installing other software required for the installation of other programs." 5 70
 installpkg curl
@@ -191,7 +191,7 @@ installpkg git
 installpkg ntp
 
 dialog --title "LARBS Installation" --infobox "Synchronizing system time to ensure successful and secure installation of software..." 4 70
-ntp 0.us.pool.ntp.org >/dev/null 2>&1
+ntpdate 0.us.pool.ntp.org >/dev/null 2>&1
 
 [ "$distro" = arch ] && { \
 	[ -f /etc/sudoers.pacnew ] && cp /etc/sudoers.pacnew /etc/sudoers # Just in case
@@ -222,25 +222,27 @@ yes | sudo -u "$name" $aurhelper -S libxft-bgra >/dev/null 2>&1
 # Install the dotfiles in the user's home directory
 putgitrepo "$dotfilesrepo" "/home/$name" "$repobranch"
 rm -f "/home/$name/README.md" "/home/$name/LICENSE"
+# make git ignore deleted LICENSE & README.md files
+git update-index --assume-unchanged "/home/$name/README.md"
+git update-index --assume-unchanged "/home/$name/LICENSE"
 
 # Most important command! Get rid of the beep!
 systembeepoff
 
 # Make zsh the default shell for the user.
-sed -i "s/^$name:\(.*\):\/bin\/.*/$name:\1:\/bin\/zsh/" /etc/passwd
+sed -i "s/^$name:\(.*\):\/bin\/\S*/$name:\1:\/bin\/zsh/" /etc/passwd
 
 # dbus UUID must be generated for Artix runit.
 dbus-uuidgen > /var/lib/dbus/machine-id
 
 # Block Brave autoupdates just in case. (I don't know if these even exist on Linux, but whatever.)
-grep -q "laptop-updates.brave.com" /etc/hosts || echo "0.0.0.0 laptop-updates.brave.com
-0.0.0.0 go-updater.brave.com" >> /etc/hosts
+grep -q "laptop-updates.brave.com" /etc/hosts || echo "0.0.0.0 laptop-updates.brave.com" >> /etc/hosts
 
 # If user chose i3, start i3 on startx by default.
-[ "$edition" = "i3" ] && sed -i "s/^exec dwm/# exec dwm/;s/^#\s*exec i3/exec i3/;s/#\s*export STATUSBAR=\"\?i3blocks\"\?/export STATUSBAR=\"i3blocks\"/" "/home/$name/.xinitrc"
+[ "$edition" = "i3" ] && sed -i "s/^ssh-agent dwm/# ssh-agent dwm/;s/^#\s*ssh-agent i3/ssh-agent i3/;s/#\s*export STATUSBAR=\"\?i3blocks\"\?/export STATUSBAR=\"i3blocks\"/" "/home/$name/.xinitrc"
 
 # Start/restart PulseAudio.
-killall pulseaudio; sudo -n "$name" pulseaudio --start
+killall pulseaudio; sudo -u "$name" pulseaudio --start
 
 # This line, overwriting the `newperms` command above will allow the user to run
 # serveral important commands, `shutdown`, `reboot`, updating, etc. without a password.
